@@ -1,0 +1,111 @@
+{
+    "actors": [
+        {
+            "id": "emergency_team",
+            "category": "evac_zone",
+            "capacity": 5,
+            "skills": [
+                "evacuate_workers"
+            ]
+        },
+        {
+            "id": "fire_department",
+            "category": "hazardous_material",
+            "capacity": 2,
+            "skills": [
+                "contain_spill",
+                "drain_flush_water"
+            ]
+        },
+        {
+            "id": "hospital",
+            "category": "hospital",
+            "capacity": 2,
+            "skills": [
+                "provide_medical_aid"
+            ]
+        },
+        {
+            "id": "shelter",
+            "category": "shelter",
+            "capacity": 1,
+            "skills": [
+                "set_up_shelter"
+            ]
+        },
+        {
+            "id": "generalist",
+            "category": "multi_role",
+            "capacity": 10,
+            "skills": [
+                "evacuate_workers",
+                "contain_spill",
+                "drain_flush_water",
+                "provide_medical_aid",
+                "set_up_shelter"
+            ],
+            "agentic_override": true
+        }
+    ],
+    "tasks": [
+        {
+            "id": "evacuate_workers",
+            "category": "evac_zone",
+            "demand": 10,
+            "deadline": 300,
+            "flexible": false,
+            "policy_block": false,
+            "required_resources": []
+        },
+        {
+            "id": "contain_spill",
+            "category": "hazardous_material",
+            "demand": 3,
+            "deadline": 300,
+            "flexible": false,
+            "policy_block": false,
+            "required_resources": []
+        },
+        {
+            "id": "drain_flush_water",
+            "category": "water",
+            "demand": 2,
+            "deadline": 300,
+            "flexible": false,
+            "policy_block": false,
+            "required_resources": []
+        },
+        {
+            "id": "provide_medical_aid",
+            "category": "hospital",
+            "demand": 5,
+            "deadline": 300,
+            "flexible": false,
+            "policy_block": false,
+            "required_resources": []
+        },
+        {
+            "id": "set_up_shelter",
+            "category": "shelter",
+            "demand": 4,
+            "deadline": 300,
+            "flexible": false,
+            "policy_block": false,
+            "required_resources": []
+        }
+    ],
+    "constraints": {},
+    "objectives": {}
+        ,
+        "demoPresets": {
+            "immediateOverride": {
+                "actors": [
+                    { "id": "specialist_a", "capabilities": ["hospital"], "capacity": 10, "current_load": 9 },
+                    { "id": "generalist", "skills": ["generalist"], "capacity": 10, "current_load": 0, "agentic_override": true }
+                ],
+                "tasks": [
+                    { "id": "provide_medical_aid", "category": "hospital", "demand": 5, "deadline": 300 }
+                ]
+            }
+        }
+}

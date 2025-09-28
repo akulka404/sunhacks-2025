@@ -1,0 +1,100 @@
+:root {
+  --bg: #0b0f14;
+  --fg: #e6f0ff;
+  --muted: #9ab;
+  --accent: #5eead4;
+  --accent-2: #60a5fa;
+}
+
+* { box-sizing: border-box; }
+html, body, #__next { height: 100%; }
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+  background: radial-gradient(1200px 800px at 80% 10%, rgba(96,165,250,0.15), transparent),
+              radial-gradient(1000px 700px at 20% 90%, rgba(94,234,212,0.12), transparent),
+              var(--bg);
+  color: var(--fg);
+}
+
+.center {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.card {
+  width: 100%;
+  max-width: 720px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 16px;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.4);
+  padding: 28px;
+  backdrop-filter: blur(8px);
+}
+
+.title {
+  font-size: 36px;
+  line-height: 1.1;
+  margin: 0 0 16px;
+  letter-spacing: 0.5px;
+}
+
+.subtitle { color: var(--muted); margin: 0 0 28px; }
+.subtitle strong { color: var(--fg); }
+
+.promptRow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+}
+
+.input {
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.06);
+  color: var(--fg);
+  outline: none;
+}
+.input::placeholder { color: #b9c3d4; }
+.input:focus { border-color: rgba(94,234,212,0.6); box-shadow: 0 0 0 3px rgba(94,234,212,0.2); }
+
+.button {
+  white-space: nowrap;
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: #001018;
+  font-weight: 600;
+  cursor: pointer;
+}
+.button:disabled { opacity: 0.65; cursor: not-allowed; }
+
+.footer {
+  margin-top: 16px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Subtle pop-in for nodes/pins */
+@keyframes pop-in {
+  0% { opacity: 0; transform: scale(0.9) translateY(6px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* Gentle pulse for active highlights */
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(94,234,212,0.25); }
+  70% { box-shadow: 0 0 0 12px rgba(94,234,212,0); }
+  100% { box-shadow: 0 0 0 0 rgba(94,234,212,0); }
+}
+
+/* Simple spinner rotation */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
