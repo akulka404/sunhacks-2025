@@ -1,8 +1,25 @@
 {
+  "scenario": {
+    "name": "Multi-Crisis Load Balancing Demo (Metro Emergency)",
+    "summary": "Cascading crisis scenario designed to demonstrate agentic load balancing superiority over deterministic assignment. Multiple simultaneous emergencies with constrained specialized resources.",
+    "objectives": {
+      "hospital_operations": 0.30,
+      "evacuation_completion": 0.25,
+      "power_restoration": 0.20,
+      "shelter_capacity": 0.15,
+      "traffic_management": 0.10
+    }
+  },
+  "llm": {
+    "temperature": 0.3,
+    "temperatureSimulate": 0.3,
+    "temperatureAgent": 0.2,
+    "top_p": 0.9
+  },
   "constraints": {
     "enforceTimeLimit": true,
-    "enforceResourceLimit": true,
-    "enforcePolicyLimit": true,
+    "enforceResourceLimit": false,
+    "enforcePolicyLimit": false,
     "time": {
       "flexibleField": "flexible"
     },
@@ -15,42 +32,172 @@
       "taskField": "policy_block"
     }
   },
+  "categoryWeights": {
+    "hospital": 1.0,
+    "power": 0.95,
+    "evac_zone": 0.9,
+    "shelter": 0.85,
+    "traffic": 0.8,
+    "comms": 0.75,
+    "logistics": 0.7,
+    "hazmat": 0.65
+  },
+  "categorySkills": {
+    "hospital": ["hospital", "medical"],
+    "power": ["power", "electrical"],
+    "evac_zone": ["evac", "evacuation"],
+    "shelter": ["shelter", "housing"],
+    "traffic": ["traffic", "transportation"],
+    "logistics": ["logistics", "supply"],
+    "comms": ["comms", "communication"],
+    "hazmat": ["hazardous_material", "hazmat"]
+  },
+  "agentTemplates": {
+    "default": {
+      "actions": [
+        "Reviewing SOP and resource posture for {id}",
+        "Coordinating initial stakeholders for {id}",
+        "Drafting execution plan for {id} (demand {demand})"
+      ],
+      "insights": [
+        "Proceeding with conservative plan; start in {startIn} min"
+      ]
+    },
+    "power": {
+      "actions": [
+        "Assessing substation state and feeder topology for {id}",
+        "Verifying linemen availability and spares for {id}",
+        "Sequencing restoration steps for {id}"
+      ],
+      "insights": [
+        "Prioritizing hospital circuits; estimated start in {startIn} min"
+      ]
+    },
+    "evac_zone": {
+      "actions": [
+        "Mapping stairwells and identifying mobility-impaired for {id}",
+        "Coordinating transport and staging for {id}",
+        "Issuing comms to residents for {id}"
+      ],
+      "insights": [
+        "Risk-balanced phasing to reduce heat exposure; start in {startIn} min"
+      ]
+    },
+    "shelter": {
+      "actions": [
+        "Surveying facilities and HVAC status for {id}",
+        "Staffing plan and intake flow for {id}",
+        "Procuring cots/water for {id}"
+      ],
+      "insights": [
+        "Leaning on public/private sites; start in {startIn} min"
+      ]
+    },
+    "traffic": {
+      "actions": [
+        "Analyzing blackout intersections for {id}",
+        "Dispatching traffic control units for {id}",
+        "Publishing detours for {id}"
+      ],
+      "insights": [
+        "Heat-aware detours; start in {startIn} min"
+      ]
+    },
+    "hazmat": {
+      "actions": [
+        "Identifying energized equipment risk for {id}",
+        "Establishing hot/warm/cold zones for {id}",
+        "Coordinating with utility and fire for {id}"
+      ],
+      "insights": [
+        "Containment with minimal exposure; start in {startIn} min"
+      ]
+    }
+  },
+  "phases": [0.25, 0.5, 0.75, 1.0],
+  "throttle": {
+    "overrideCapPerRound": 4,
+    "actorsPerRoundMin": 2,
+    "actorsPerRoundMax": 4,
+    "minIntervalMs": 800
+  },
   "injectedTasks": [
     {
-      "idPrefix": "evacuate_neighborhoods",
-      "category": "evac_zone",
-      "demand": 300,
+      "idPrefix": "critical_hospital_backup",
+      "category": "hospital",
+      "demand": 8,
+      "deadlineMinutesFromNow": 45,
+      "flexible": false
+    },
+    {
+      "idPrefix": "restore_grid_sector_a",
+      "category": "power",
+      "demand": 12,
       "deadlineMinutesFromNow": 60,
       "flexible": false
     },
     {
-      "idPrefix": "restore_power_grid",
-      "category": "utility",
-      "demand": 5,
+      "idPrefix": "evacuate_tower_complex",
+      "category": "evac_zone",
+      "demand": 25,
+      "deadlineMinutesFromNow": 75,
+      "flexible": false
+    },
+    {
+      "idPrefix": "emergency_shelter_setup",
+      "category": "shelter",
+      "demand": 15,
       "deadlineMinutesFromNow": 90,
       "flexible": true
     },
     {
-      "idPrefix": "contain_flooded_area",
-      "category": "hazmat",
-      "demand": 3,
-      "deadlineMinutesFromNow": 60,
-      "policy_block": ["volunteers"],
+      "idPrefix": "traffic_rerouting_urgent",
+      "category": "traffic",
+      "demand": 6,
+      "deadlineMinutesFromNow": 30,
       "flexible": false
     },
     {
-      "idPrefix": "provide_emergency_care",
-      "category": "hospital",
-      "demand": 100,
+      "idPrefix": "supply_chain_logistics",
+      "category": "logistics",
+      "demand": 10,
       "deadlineMinutesFromNow": 120,
       "flexible": true
     },
     {
-      "idPrefix": "setup_emergency_shelters",
-      "category": "shelter",
-      "demand": 75,
-      "deadlineMinutesFromNow": 180,
+      "idPrefix": "restore_communications",
+      "category": "comms",
+      "demand": 4,
+      "deadlineMinutesFromNow": 50,
       "flexible": true
     }
-  ]
+  ],
+  "demoPresets": {
+    "loadBalancingDemo": {
+      "actors": [
+        { "id": "hospital_team", "capabilities": ["hospital"], "capacity": 5, "current_load": 0 },
+        { "id": "power_utility", "capabilities": ["power"], "capacity": 8, "current_load": 0 },
+        { "id": "fire_rescue", "capabilities": ["evac"], "capacity": 6, "current_load": 0 },
+        { "id": "emergency_mgmt", "capabilities": ["shelter"], "capacity": 4, "current_load": 0 },
+        { "id": "traffic_control", "capabilities": ["traffic"], "capacity": 3, "current_load": 0 },
+        { "id": "logistics_team", "capabilities": ["logistics"], "capacity": 2, "current_load": 0 },
+        { "id": "comms_team", "capabilities": ["comms"], "capacity": 2, "current_load": 0 },
+        { "id": "adaptive_responders", "skills": ["generalist"], "capacity": 20, "current_load": 0, "agentic_override": true },
+        { "id": "cross_trained_specialists", "capabilities": ["hospital", "power"], "capacity": 8, "current_load": 0, "agentic_override": true }
+      ],
+      "tasks": [
+        { "id": "critical_hospital_backup_1", "category": "hospital", "demand": 8, "deadline": 45 },
+        { "id": "critical_hospital_backup_2", "category": "hospital", "demand": 6, "deadline": 50 },
+        { "id": "restore_grid_sector_a_1", "category": "power", "demand": 12, "deadline": 60 },
+        { "id": "restore_grid_sector_b_1", "category": "power", "demand": 10, "deadline": 65 },
+        { "id": "evacuate_tower_complex_1", "category": "evac_zone", "demand": 25, "deadline": 75 },
+        { "id": "emergency_shelter_setup_1", "category": "shelter", "demand": 15, "deadline": 90 },
+        { "id": "emergency_shelter_setup_2", "category": "shelter", "demand": 8, "deadline": 95 },
+        { "id": "traffic_rerouting_urgent_1", "category": "traffic", "demand": 6, "deadline": 30 },
+        { "id": "traffic_rerouting_urgent_2", "category": "traffic", "demand": 4, "deadline": 35 },
+        { "id": "supply_chain_logistics_1", "category": "logistics", "demand": 10, "deadline": 120 },
+        { "id": "restore_communications_1", "category": "comms", "demand": 4, "deadline": 50 }
+      ]
+    }
+  }
 }

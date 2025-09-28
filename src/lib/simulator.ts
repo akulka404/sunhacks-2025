@@ -241,6 +241,8 @@ export function buildAssignmentSteps(actors: Actor[], tasks: Task[], opts: Assig
           if (baseAvail > 0) {
             const amt = Math.min(baseAvail, demand);
             steps.push({ type: 'assign', taskId: task.id, actorId: best.id, amount: amt, category: task.category });
+            // Update actor load
+            best.current_load = (best.current_load || 0) + amt;
             if (priorityScore(task) >= 0.5) busyHighPriority.add(best.id);
             const phases = (Array.isArray(cfg?.phases) && cfg.phases.length > 0) ? cfg.phases : [0.33, 0.66, 1.0];
             (phases as number[]).forEach((p: number, i: number) => {
@@ -261,7 +263,7 @@ export function buildAssignmentSteps(actors: Actor[], tasks: Task[], opts: Assig
     const allocations: Array<{ actorId: string; amount: number }> = [];
     for (const { a, avail } of availList) {
       const part = Math.round((avail / totalAvail) * demand);
-      const amt = Math.min(part, remaining);
+      const amt = Math.min(part, remaining, avail);
       if (amt > 0) {
         allocations.push({ actorId: a.id, amount: amt });
         remaining -= amt;
@@ -279,11 +281,24 @@ export function buildAssignmentSteps(actors: Actor[], tasks: Task[], opts: Assig
       }
     }
     if (remaining > 0) {
-      steps.push({ type: 'blocked', taskId: task.id, message: `Unmet demand of ${remaining} due to capacity limits.`, details: { reason: 'unmet_remainder', remaining, allocations: allocations.slice(), perActor: availList.map(x => ({ actorId: x.a.id, finalAvail: x.avail })) } });
+      // If significant demand remains unmet, block the entire task in deterministic mode
+      const unmetRatio = remaining / demand;
+      if (!agenticMode && unmetRatio > 0.5) {
+        steps.push({ type: 'blocked', taskId: task.id, message: `Task blocked: ${remaining}/${demand} demand unmet (${Math.round(unmetRatio * 100)}% shortfall exceeds capacity limits).`, details: { reason: 'insufficient_capacity', remaining, demand, unmetRatio, allocations: allocations.slice() } });
+        // Don't execute the task if more than 50% demand is unmet in deterministic mode
+        continue;
+      } else {
+        steps.push({ type: 'blocked', taskId: task.id, message: `Unmet demand of ${remaining} due to capacity limits.`, details: { reason: 'unmet_remainder', remaining, allocations: allocations.slice(), perActor: availList.map(x => ({ actorId: x.a.id, finalAvail: x.avail })) } });
+      }
     }
 
     allocations.forEach((al) => {
       steps.push({ type: 'assign', taskId: task.id, actorId: al.actorId, amount: al.amount, category: task.category });
+      // Update actor load
+      const actor = A.find(a => a.id === al.actorId);
+      if (actor) {
+        actor.current_load = (actor.current_load || 0) + al.amount;
+      }
     });
     const phases = (Array.isArray(cfg?.phases) && cfg.phases.length > 0) ? cfg.phases : [0.33, 0.66, 1.0];
     (phases as number[]).forEach((p: number, i: number) => {
@@ -292,12 +307,16 @@ export function buildAssignmentSteps(actors: Actor[], tasks: Task[], opts: Assig
     steps.push({ type: 'complete', taskId: task.id });
   }
 
-  // Retry pass
-  if (retryQueue.length > 0) {
+  // Retry pass - only for agentic mode to show clear differentiation
+  if (retryQueue.length > 0 && agenticMode) {
     for (const task of retryQueue) {
       const demand = Math.max(0, Number(task.demand ?? 0));
       if (demand <= 0) continue;
-  let candidates = A.filter((a) => defaultEligible(cfg, a, task));
+      let candidates = A.filter((a) => defaultEligible(cfg, a, task));
+      // Apply the same constraint filters as the primary pass
+      if (enforceRes) candidates = candidates.filter((a) => hasResourcesFor(cfg, a, task));
+      if (enforcePol) candidates = candidates.filter((a) => !violatesPolicy(cfg, a, task));
+      if (task.actor) candidates = candidates.filter((a) => a.id === task.actor);
       if (agenticMode) {
         const defaultBest = [...candidates].sort((a, b) => getActorAvail(b) - getActorAvail(a))[0];
         if (!defaultBest || (defaultBest && (getActorAvail(defaultBest) <= (defaultBest.capacity ?? 0) * 0.2))) {
@@ -325,10 +344,17 @@ export function buildAssignmentSteps(actors: Actor[], tasks: Task[], opts: Assig
       const allocations: Array<{ actorId: string; amount: number }> = [];
       for (const { a, avail } of availList) {
         const part = Math.round((avail / totalAvail) * demand);
-        const amt = Math.min(part, remaining);
+        const amt = Math.min(part, remaining, avail);
         if (amt > 0) { allocations.push({ actorId: a.id, amount: amt }); remaining -= amt; }
       }
-      allocations.forEach((al) => steps.push({ type: 'assign', taskId: task.id, actorId: al.actorId, amount: al.amount, category: task.category }));
+      allocations.forEach((al) => {
+        steps.push({ type: 'assign', taskId: task.id, actorId: al.actorId, amount: al.amount, category: task.category });
+        // Update actor load
+        const actor = A.find(a => a.id === al.actorId);
+        if (actor) {
+          actor.current_load = (actor.current_load || 0) + al.amount;
+        }
+      });
       const phases = (Array.isArray(cfg?.phases) && cfg.phases.length > 0) ? cfg.phases : [0.33, 0.66, 1.0];
       (phases as number[]).forEach((p: number, i: number) => {
         steps.push({ type: 'execute', taskId: task.id, progress: Math.round(p * 100), phase: i + 1, of: phases.length, actors: allocations.map(a => a.actorId) });

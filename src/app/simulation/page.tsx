@@ -56,6 +56,15 @@ export default function SimulationPage() {
   const [injectNovelTask, setInjectNovelTask] = useState(false);
   // Live settings (session-local overrides)
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [rerunLoading, setRerunLoading] = useState(false);
+  // Comparison panel state
+  const [comparisonOpen, setComparisonOpen] = useState(false);
+  const [comparisonData, setComparisonData] = useState<{
+    deterministicResults?: any;
+    agenticResults?: any;
+  }>({});
+  // Actor load tracking separate from plan to avoid triggering rebuilds
+  const [actorLoads, setActorLoads] = useState<Record<string, number>>({});
   const [localConfig, setLocalConfig] = useState<any>(() => {
     try {
       const saved = sessionStorage.getItem('crisisverse.configOverrides');
@@ -118,8 +127,14 @@ export default function SimulationPage() {
 
   // Prefer worldState when agentic mode is enabled, else fall back to static plan
   // Board parity: in agentic mode, reflect worldState tasks so injected tasks appear immediately
-  const actors = (agenticMode && worldState?.actors) ? (worldState?.actors as any[]) : (plan?.actors ?? []);
+  const baseActors = (agenticMode && worldState?.actors) ? (worldState?.actors as any[]) : (plan?.actors ?? []);
   const tasks = (agenticMode && worldState?.tasks) ? (worldState?.tasks as any[]) : (plan?.tasks ?? []);
+  
+  // Combine base actors with real-time load tracking
+  const actors = baseActors.map(actor => ({
+    ...actor,
+    current_load: (actor.current_load || 0) + (actorLoads[actor.id] || 0)
+  }));
 
   const edges = useMemo(() => {
     // connect each actor to the next; also connect task->actor if present
@@ -214,26 +229,49 @@ export default function SimulationPage() {
     const map = new Map<string, TaskState>();
     for (const t of allTasks || []) map.set(t.id, { stage: 'assess' });
     const end = Math.min(allSteps.length - 1, Math.max(0, uptoIndex));
+    
+    // Track the final state for each task to avoid overwrites
+    const finalStates = new Map<string, { stepIndex: number, state: TaskState }>();
+    
     for (let i = 0; i <= end; i++) {
       const st = allSteps[i];
       if (!st) continue;
-      const id = st.taskId;
+      
+      // Debug: Check all possible task ID fields
+      const id = st.taskId || st.task_id || st.id;
+      console.log(`[Debug] Step ${i}: type=${st.type}, taskId=${st.taskId}, task_id=${st.task_id}, id=${st.id}, derived_id=${id}`);
+      
       if (!id) continue;
-      const cur = map.get(id) || { stage: 'assess' };
+      
+      let newState: TaskState | null = null;
+      
       if (st.type === 'blocked' || st.type === 'unassigned' || st.type === 'skip') {
-        map.set(id, { stage: 'blocked', message: st.message, details: st.details });
+        newState = { stage: 'blocked', message: st.message, details: st.details };
       } else if (st.type === 'assign') {
-        map.set(id, { stage: 'assign' });
+        newState = { stage: 'assign' };
       } else if (st.type === 'execute') {
-        map.set(id, { stage: 'execute', progress: st.progress, actors: st.actors });
+        newState = { stage: 'execute', progress: st.progress, actors: st.actors };
       } else if (st.type === 'complete') {
-        map.set(id, { stage: 'complete' });
-      } else if (st.type === 'agent' || st.type === 'agentThink' || st.type === 'agentAction') {
-        map.set(id, { stage: 'agent', message: st.message });
-      } else if (!map.has(id)) {
-        map.set(id, cur);
+        newState = { stage: 'complete' };
+      } else if (st.type === 'agentThink' || st.type === 'agentAction' || st.type === 'agentInsight') {
+        // Only set to agent if not already in a later stage
+        const current = finalStates.get(id);
+        if (!current || (current.state.stage === 'assess' || current.state.stage === 'agent')) {
+          newState = { stage: 'agent', message: st.message };
+        }
+      }
+      
+      if (newState) {
+        const existing = finalStates.get(id);
+        // Only update if this is a later step or a more advanced stage
+        if (!existing || i >= existing.stepIndex) {
+          finalStates.set(id, { stepIndex: i, state: newState });
+          map.set(id, newState);
+        }
       }
     }
+    
+    console.log('[Debug] Final task states map:', Array.from(map.entries()));
     return map;
   }
 
@@ -314,14 +352,16 @@ export default function SimulationPage() {
       (sevWeights.blocked ?? 0.1) * Math.min(1, blockedRatio * blockedAmp)
     ));
 
-    // Dynamic priorities by remaining score
+    // Dynamic priorities by base importance (show original scores, not remaining)
     const priorities = [...T].map((t) => {
       const base = perTaskBase[t.id] || 0;
       const s = states.get(t.id);
       const progress = s?.stage === 'complete' ? 1 : s?.stage === 'execute' ? (Math.max(0, Math.min(100, s.progress ?? 0)) / 100) : 0;
+      // Show base score for importance, but sort by remaining work
       const remaining = Math.max(0, base * (1 - progress));
-      return { id: t.id, category: t.category, demand: t.demand, deadline: t.deadline, score: remaining };
-    }).sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, Math.max(1, Number(((cfg as any)?.topN?.priorities ?? 5))));
+      const displayScore = base; // Always show the original importance
+      return { id: t.id, category: t.category, demand: t.demand, deadline: t.deadline, score: displayScore, remaining, progress, stage: s?.stage };
+    }).sort((a, b) => (b.remaining || 0) - (a.remaining || 0)).slice(0, Math.max(1, Number(((cfg as any)?.topN?.priorities ?? 5))));
 
     // Risks
     const risks: string[] = [];
@@ -346,9 +386,13 @@ export default function SimulationPage() {
   const taskStates = useMemo(() => deriveTaskStates(steps, stepIndex, tasks), [steps, stepIndex, tasks]);
 
   const assessment = useMemo(() => {
+    // Only show assessment after simulation has started (stepIndex > 0)
+    if (stepIndex === 0 && !running) {
+      return { severity: 0, risks: [], priorities: [] };
+    }
     const src = (agenticMode && worldState) ? worldState : plan;
     return src ? computeAssessment(src, taskStates) : { severity: 0, risks: [], priorities: [] };
-  }, [plan, worldState, agenticMode, taskStates]);
+  }, [plan, worldState, agenticMode, taskStates, stepIndex, running]);
 
   // Build the end-to-end step list for a given plan using the simulator engine
   function buildSteps(p: Plan) {
@@ -375,6 +419,7 @@ export default function SimulationPage() {
       setSteps(s);
       setStepIndex(0);
       setLog([]);
+      setActorLoads({}); // Reset actor loads for new plan
     }
   }, [plan]);
 
@@ -457,7 +502,7 @@ export default function SimulationPage() {
     agenticInFlightRef.current = true;
     const ws = JSON.parse(JSON.stringify(worldState)) as Plan;
     simulateRandomEvents(ws);
-    if (injectNovelTask && Math.random() < 0.5) {
+    if (injectNovelTask && Math.random() < 0.8) {
       const presets: any[] = Array.isArray((cfg as any)?.injectedTasks) ? (cfg as any).injectedTasks : [];
       const pick = presets.length ? presets[Math.floor(Math.random() * presets.length)] : null;
       const nowSec = Math.floor(Date.now() / 1000);
@@ -512,7 +557,7 @@ export default function SimulationPage() {
   }
 
   function applyStepEffects(st: any) {
-    // For now just push to log
+    // Apply effects and return log message
     switch (st.type) {
       case "assessment":
         return `Assessment: ${st.message}`;
@@ -523,6 +568,13 @@ export default function SimulationPage() {
       case "agentInsight":
         return `Agent insight: ${st.actorId || 'agent'} on ${st.taskId} — ${(st.insight?.note || '').toString()}`.trim();
       case "assign":
+        // Update actor load in separate state to avoid triggering plan rebuild
+        if (st.actorId && typeof st.amount === 'number') {
+          setActorLoads(prev => ({
+            ...prev,
+            [st.actorId]: (prev[st.actorId] || 0) + st.amount
+          }));
+        }
         return `Assign: ${st.actorId} -> ${st.taskId} (${st.amount})`;
       case "execute":
         return `Execute: ${st.taskId} ${st.progress}% (phase ${st.phase}/${st.of})`;
@@ -615,25 +667,36 @@ export default function SimulationPage() {
           <button className="button" onClick={() => (window.location.href = "/")}>back</button>
           <button
             className="button"
-            onClick={() => {
+            disabled={rerunLoading}
+            onClick={async () => {
               // allow re-run using the last prompt if available
               const lastPrompt = sessionStorage.getItem("crisisverse.lastPrompt");
               if (!lastPrompt) return (window.location.href = "/");
-              fetch("/api/simulate", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ prompt: lastPrompt }),
-              })
-                .then((r) => r.json())
-                .then((d) => {
-                  if (d?.ok && d?.plan) {
-                    sessionStorage.setItem("crisisverse.plan", JSON.stringify(d.plan));
-                    window.location.reload();
-                  }
+              
+              setRerunLoading(true);
+              try {
+                const response = await fetch("/api/simulate", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ prompt: lastPrompt }),
                 });
+                const data = await response.json();
+                if (data?.ok && data?.plan) {
+                  sessionStorage.setItem("crisisverse.plan", JSON.stringify(data.plan));
+                  // Show success message briefly before reload
+                  alert("New plan generated! Page will reload with fresh simulation.");
+                  window.location.reload();
+                } else {
+                  alert("Failed to generate new plan. Please try again.");
+                }
+              } catch (error) {
+                alert("Error generating new plan. Please try again.");
+              } finally {
+                setRerunLoading(false);
+              }
             }}
           >
-            re-run simulation
+            {rerunLoading ? "generating new plan..." : "re-run simulation"}
           </button>
           <button className="button" onClick={handleStart} disabled={running}>start</button>
           <button className="button" onClick={() => setRunning(false)} disabled={!running}>pause</button>
@@ -653,7 +716,43 @@ export default function SimulationPage() {
             <option value="700">speed: fast</option>
             <option value="400">speed: very fast</option>
           </select>
-          <button className="button" onClick={() => { setStepIndex(0); setLog([]); setRunning(false); }}>reset</button>
+          <button 
+            className="button" 
+            onClick={() => { 
+              setStepIndex(0); 
+              setLog([]); 
+              setRunning(false); 
+              setActorLoads({}); // Reset actor loads
+            }}
+            title="Reset: Restarts current simulation from step 1 (same plan/actors)"
+          >
+            reset
+          </button>
+          <button
+            className="button"
+            onClick={() => {
+              // Save current results for comparison
+              const currentResults = {
+                mode: agenticMode ? 'agentic' : 'deterministic',
+                taskStates: Array.from(taskStates.entries()),
+                assessment: assessment,
+                actorLoads: actors.map(a => ({ id: a.id, load: a.current_load, capacity: a.capacity })),
+                completedTasks: Array.from(taskStates.entries()).filter(([_, state]) => state.stage === 'complete').length,
+                blockedTasks: Array.from(taskStates.entries()).filter(([_, state]) => state.stage === 'blocked').length,
+                timestamp: new Date().toISOString()
+              };
+              
+              if (agenticMode) {
+                setComparisonData(prev => ({ ...prev, agenticResults: currentResults }));
+              } else {
+                setComparisonData(prev => ({ ...prev, deterministicResults: currentResults }));
+              }
+              
+              alert(`${agenticMode ? 'Agentic' : 'Deterministic'} results saved for comparison!`);
+            }}
+          >
+            save results
+          </button>
         </div>
         {agenticMode && (
           <div className="card" style={{ padding: 10, marginTop: -8, marginBottom: 8, background: 'rgba(94,234,212,0.10)', borderColor: 'rgba(94,234,212,0.4)' }}>
@@ -780,6 +879,133 @@ export default function SimulationPage() {
           </div>
         )}
 
+        {/* Comparison Panel */}
+        {comparisonOpen && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 50 }} onClick={() => setComparisonOpen(false)}>
+            <div className="card" style={{ position: 'absolute', right: 16, top: 16, width: 620, maxWidth: '96vw', padding: 16, maxHeight: '90vh', overflow: 'auto' }} onClick={(e) => e.stopPropagation()}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                <div className="subtitle" style={{ margin: 0 }}>Agentic vs Deterministic Comparison</div>
+                <button className="button" onClick={() => setComparisonOpen(false)}>close</button>
+              </div>
+              
+              {(!comparisonData.deterministicResults || !comparisonData.agenticResults) ? (
+                <div style={{ color: '#9ab', fontSize: 14, padding: 20, textAlign: 'center' }}>
+                  <p>Run both simulations and save results to see comparison:</p>
+                  <ol style={{ textAlign: 'left', color: '#d7e6ff', marginTop: 12 }}>
+                    <li>Run with <strong>Agentic Mode OFF</strong> → Click "Save Results"</li>
+                    <li>Click "Re-run Simulation" (wait for new plan)</li>
+                    <li>Run with <strong>Agentic Mode ON</strong> → Click "Save Results"</li>
+                    <li>View comparison here</li>
+                  </ol>
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gap: 16 }}>
+                  {/* Summary Comparison */}
+                  <div className="card" style={{ padding: 16, background: 'rgba(94,234,212,0.08)' }}>
+                    <div style={{ fontWeight: 600, marginBottom: 12, color: '#5eead4' }}>Key Performance Metrics</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, fontSize: 13 }}>
+                      <div style={{ color: '#9ab' }}>Metric</div>
+                      <div style={{ color: '#f87171' }}>Deterministic</div>
+                      <div style={{ color: '#34d399' }}>Agentic</div>
+                      
+                      <div>Tasks Completed</div>
+                      <div>{comparisonData.deterministicResults?.completedTasks || 0}</div>
+                      <div>{comparisonData.agenticResults?.completedTasks || 0}</div>
+                      
+                      <div>Tasks Blocked</div>
+                      <div>{comparisonData.deterministicResults?.blockedTasks || 0}</div>
+                      <div>{comparisonData.agenticResults?.blockedTasks || 0}</div>
+                      
+                      <div>Threat Severity</div>
+                      <div>{Math.round((comparisonData.deterministicResults?.assessment?.severity || 0) * 100)}%</div>
+                      <div>{Math.round((comparisonData.agenticResults?.assessment?.severity || 0) * 100)}%</div>
+                    </div>
+                  </div>
+
+                  {/* Improvement Analysis */}
+                  <div className="card" style={{ padding: 16 }}>
+                    <div style={{ fontWeight: 600, marginBottom: 12 }}>Improvement Analysis</div>
+                    {(() => {
+                      const detCompleted = comparisonData.deterministicResults?.completedTasks || 0;
+                      const agCompleted = comparisonData.agenticResults?.completedTasks || 0;
+                      const improvement = agCompleted - detCompleted;
+                      const improvementPct = detCompleted > 0 ? Math.round((improvement / detCompleted) * 100) : 0;
+                      
+                      return (
+                        <div style={{ color: improvement > 0 ? '#34d399' : '#f87171', fontSize: 14 }}>
+                          {improvement > 0 ? '✅' : '❌'} Agentic mode completed <strong>{improvement}</strong> more tasks 
+                          {improvementPct > 0 && ` (+${improvementPct}% improvement)`}
+                        </div>
+                      );
+                    })()}
+                  </div>
+
+                  {/* Actor Utilization */}
+                  <div className="card" style={{ padding: 16 }}>
+                    <div style={{ fontWeight: 600, marginBottom: 12 }}>Actor Utilization</div>
+                    <div style={{ display: 'grid', gap: 8 }}>
+                      {(comparisonData.deterministicResults?.actorLoads || []).map((actor: any, idx: number) => {
+                        const agenticActor = (comparisonData.agenticResults?.actorLoads || []).find((a: any) => a.id === actor.id);
+                        return (
+                          <div key={actor.id} style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: 8, alignItems: 'center', fontSize: 12 }}>
+                            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{actor.id}</div>
+                            <div style={{ color: '#f87171' }}>Det: {actor.load}/{actor.capacity}</div>
+                            <div style={{ color: '#34d399' }}>Ag: {agenticActor?.load || 0}/{agenticActor?.capacity || 0}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
+                    <button 
+                      className="button" 
+                      onClick={() => {
+                        setComparisonData({});
+                        alert("Comparison data cleared. Run new simulations to compare again.");
+                      }}
+                    >
+                      Clear Results
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Comparison Toggle Button - Fixed Position */}
+        {(comparisonData.deterministicResults || comparisonData.agenticResults) && (
+          <div 
+            style={{ 
+              position: 'fixed', 
+              right: 16, 
+              top: '50%', 
+              transform: 'translateY(-50%)', 
+              zIndex: 40,
+              cursor: 'pointer'
+            }}
+            onClick={() => setComparisonOpen(!comparisonOpen)}
+          >
+            <div 
+              className="card" 
+              style={{ 
+                padding: '8px 12px', 
+                background: 'rgba(94,234,212,0.12)', 
+                borderColor: 'rgba(94,234,212,0.4)',
+                fontSize: 12,
+                fontWeight: 600,
+                color: '#5eead4',
+                writingMode: 'vertical-rl',
+                textOrientation: 'mixed'
+              }}
+              title="Click to compare Agentic vs Deterministic results"
+            >
+              {comparisonOpen ? '→' : '←'} Compare Results
+            </div>
+          </div>
+        )}
+
   {/* Threat Assessment header */}
   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12, marginBottom: 16 }}>
           <div className="card" style={{ padding: 16 }}>
@@ -787,7 +1013,9 @@ export default function SimulationPage() {
             <div style={{ marginTop: 8, height: 14, background: 'rgba(255,255,255,0.08)', borderRadius: 999 }}>
               <div style={{ width: `${Math.round((assessment.severity || 0) * 100)}%`, height: 14, borderRadius: 999, background: 'linear-gradient(90deg, #f87171, #fbbf24, #5eead4)' }} />
             </div>
-            <div style={{ marginTop: 6, color: '#9ab', fontSize: 12 }}>{Math.round((assessment.severity || 0) * 100)}% overall impact</div>
+            <div style={{ marginTop: 6, color: '#9ab', fontSize: 12 }}>
+              {stepIndex === 0 && !running ? 'Start simulation for assessment' : `${Math.round((assessment.severity || 0) * 100)}% overall impact`}
+            </div>
           </div>
           <div className="card" style={{ padding: 16 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -795,10 +1023,15 @@ export default function SimulationPage() {
               <div style={{ color: '#9ab', fontSize: 12 }}>auto-derived</div>
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
-              {(assessment.risks || []).length === 0 ? <span style={{ color: '#9ab' }}>No critical risks detected.</span> :
+              {stepIndex === 0 && !running ? (
+                <span style={{ color: '#9ab' }}>Start simulation to assess risks.</span>
+              ) : (assessment.risks || []).length === 0 ? (
+                <span style={{ color: '#9ab' }}>No critical risks detected.</span>
+              ) : (
                 assessment.risks.map((r, i) => (
                   <span key={i} style={{ fontSize: 12, padding: '4px 10px', borderRadius: 999, border: '1px solid rgba(255,255,255,0.12)', color: '#d7e6ff' }}>{r}</span>
-                ))}
+                ))
+              )}
             </div>
           </div>
           <div className="card" style={{ padding: 16 }}>
@@ -807,18 +1040,24 @@ export default function SimulationPage() {
               <div style={{ color: '#9ab', fontSize: 12 }}>by score</div>
             </div>
             <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
-              {(assessment.priorities || []).length === 0 ? (
+              {stepIndex === 0 && !running ? (
+                <div style={{ color: '#9ab' }}>Start simulation to view priorities.</div>
+              ) : (assessment.priorities || []).length === 0 ? (
                 <div style={{ color: '#9ab' }}>No tasks available</div>
               ) : (
                 assessment.priorities.map((p: any) => {
                   const cat = (p.category || '').toLowerCase();
                   const color = cat === 'hospital' ? '#f87171' : cat === 'shelter' ? '#fbbf24' : cat === 'evac_zone' ? '#34d399' : cat === 'power' ? '#60a5fa' : '#a78bfa';
-                  const pct = Math.min(100, Math.max(0, Math.round((p.score || 0) * 2)));
+                  const score = p.score || 0;
+                  const pct = Math.min(100, Math.max(5, Math.round(score * 10))); // Make scores more visible
                   return (
                     <div key={p.id}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                        <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70%' }}>{String(p.id).replace(/_/g, ' ')}</div>
-                        {p.category && <span style={{ background: color, color: '#001018', borderRadius: 999, padding: '2px 8px', fontSize: 12 }}>{p.category}</span>}
+                        <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '60%' }}>{String(p.id).replace(/_/g, ' ')}</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ color: '#9ab', fontSize: 11 }}>{score.toFixed(1)}</span>
+                          {p.category && <span style={{ background: color, color: '#001018', borderRadius: 999, padding: '2px 8px', fontSize: 12 }}>{p.category}</span>}
+                        </div>
                       </div>
                       <div style={{ height: 6, background: 'rgba(255,255,255,0.08)', borderRadius: 999 }}>
                         <div style={{ width: `${pct}%`, height: 6, borderRadius: 999, background: 'linear-gradient(90deg, #5eead4, #60a5fa)' }} />
@@ -989,7 +1228,9 @@ export default function SimulationPage() {
 
             <div className="subtitle" style={{ marginBottom: 0 }}>Objectives</div>
             <div className="card" style={{ padding: 20 }}>
-              {plan?.objectives ? (
+              {(stepIndex === 0 && !running) ? (
+                <div style={{ color: "#9ab" }}>Start simulation to view objectives progress.</div>
+              ) : plan?.objectives ? (
                 <div style={{ display: "grid", gap: 8 }}>
                   {Object.entries(plan.objectives).map(([k, v]) => (
                     <div key={k} style={{ display: "grid", gridTemplateColumns: "110px 1fr 40px", gap: 8, alignItems: "center" }}>
