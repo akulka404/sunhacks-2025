@@ -728,13 +728,17 @@ export default function SimulationPage() {
             <option value="700">speed: fast</option>
             <option value="400">speed: very fast</option>
           </select>
-          <button 
-            className="button" 
+          <button
+            className="button"
             onClick={() => { 
               setStepIndex(0); 
               setLog([]); 
               setRunning(false); 
               setActorLoads({}); // Reset actor loads
+              // Reset worldState to original plan to ensure tasks go back to assess
+              if (plan) {
+                setWorldState(JSON.parse(JSON.stringify(plan)));
+              }
             }}
             title="Reset: Restarts current simulation from step 1 (same plan/actors)"
           >
