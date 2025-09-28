@@ -1,9 +1,7 @@
 import { NextRequest } from "next/server";
-import OpenAI from "openai";
+import { getGemini } from "@/lib/gemini";
 import { callAgentLLM } from "@/lib/agents";
 import simConfig from "@/config/simulation.json";
-
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 export async function POST(req: NextRequest) {
   try {
@@ -18,6 +16,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
+  const client = getGemini();
   const { decisions, comment } = await callAgentLLM(client, actor, worldState, simConfig as any);
     return new Response(
       JSON.stringify({ ok: true, decisions, comment }),

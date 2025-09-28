@@ -65,7 +65,7 @@ export default function HomePage() {
             </div>
           </form>
 
-              <div className="footer">CrisisVerse v1.0 • Powered by OpenAI • Saving Lives Sustainably</div>
+              <div className="footer">CrisisVerse v1.0 • Powered by Google Gemini 2.5 Flash • Saving Lives Sustainably</div>
       </div>
     </main>
   );
