@@ -230,48 +230,60 @@ export default function SimulationPage() {
     for (const t of allTasks || []) map.set(t.id, { stage: 'assess' });
     const end = Math.min(allSteps.length - 1, Math.max(0, uptoIndex));
     
-    // Track the final state for each task to avoid overwrites
-    const finalStates = new Map<string, { stepIndex: number, state: TaskState }>();
+    // Track which tasks have simulation steps
+    const tasksWithSteps = new Set<string>();
     
     for (let i = 0; i <= end; i++) {
       const st = allSteps[i];
       if (!st) continue;
-      
-      // Debug: Check all possible task ID fields
-      const id = st.taskId || st.task_id || st.id;
-      console.log(`[Debug] Step ${i}: type=${st.type}, taskId=${st.taskId}, task_id=${st.task_id}, id=${st.id}, derived_id=${id}`);
-      
+      const id = st.taskId;
       if (!id) continue;
       
-      let newState: TaskState | null = null;
+      tasksWithSteps.add(id);
+      const cur = map.get(id) || { stage: 'assess' };
       
       if (st.type === 'blocked' || st.type === 'unassigned' || st.type === 'skip') {
-        newState = { stage: 'blocked', message: st.message, details: st.details };
+        map.set(id, { stage: 'blocked', message: st.message, details: st.details });
       } else if (st.type === 'assign') {
-        newState = { stage: 'assign' };
+        map.set(id, { stage: 'assign' });
       } else if (st.type === 'execute') {
-        newState = { stage: 'execute', progress: st.progress, actors: st.actors };
+        map.set(id, { stage: 'execute', progress: st.progress, actors: st.actors });
       } else if (st.type === 'complete') {
-        newState = { stage: 'complete' };
-      } else if (st.type === 'agentThink' || st.type === 'agentAction' || st.type === 'agentInsight') {
-        // Only set to agent if not already in a later stage
-        const current = finalStates.get(id);
-        if (!current || (current.state.stage === 'assess' || current.state.stage === 'agent')) {
-          newState = { stage: 'agent', message: st.message };
-        }
+        map.set(id, { stage: 'complete' });
+      } else if (st.type === 'agent' || st.type === 'agentThink' || st.type === 'agentAction') {
+        map.set(id, { stage: 'agent', message: st.message });
+      } else if (!map.has(id)) {
+        map.set(id, cur);
       }
-      
-      if (newState) {
-        const existing = finalStates.get(id);
-        // Only update if this is a later step or a more advanced stage
-        if (!existing || i >= existing.stepIndex) {
-          finalStates.set(id, { stepIndex: i, state: newState });
-          map.set(id, newState);
+    }
+    
+    // Handle novel tasks that don't have simulation steps
+    // Check if they have dynamic status from agentic processing
+    for (const t of allTasks || []) {
+      if (!tasksWithSteps.has(t.id) && agenticMode && worldState) {
+        // Check if this task has been processed by agents
+        const wsTask = worldState.tasks?.find((wt: any) => wt.id === t.id);
+        if (wsTask) {
+          const demand = wsTask.demand || 0;
+          const originalDemand = t.demand || 0;
+          const status = (wsTask as any).status;
+          const chosenBy = (wsTask as any)._chosen_by;
+          
+          if (demand <= 0) {
+            // Task completed
+            map.set(t.id, { stage: 'complete' });
+          } else if (status === 'in_progress' || chosenBy) {
+            // Task in progress
+            const progress = originalDemand > 0 ? Math.max(0, Math.min(100, ((originalDemand - demand) / originalDemand) * 100)) : 100;
+            map.set(t.id, { stage: 'execute', progress, actors: chosenBy ? [chosenBy] : [] });
+          } else {
+            // Task still awaiting assignment
+            map.set(t.id, { stage: 'assess', message: 'Novel task awaiting assignment' });
+          }
         }
       }
     }
     
-    console.log('[Debug] Final task states map:', Array.from(map.entries()));
     return map;
   }
 
@@ -1010,26 +1022,96 @@ export default function SimulationPage() {
   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12, marginBottom: 16 }}>
           <div className="card" style={{ padding: 16 }}>
             <div className="subtitle" style={{ margin: 0 }}>Threat severity</div>
-            <div style={{ marginTop: 8, height: 14, background: 'rgba(255,255,255,0.08)', borderRadius: 999 }}>
-              <div style={{ width: `${Math.round((assessment.severity || 0) * 100)}%`, height: 14, borderRadius: 999, background: 'linear-gradient(90deg, #f87171, #fbbf24, #5eead4)' }} />
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: 12, marginBottom: 8 }}>
+              {(() => {
+                const severity = Math.round((assessment.severity || 0) * 100);
+                const circumference = 2 * Math.PI * 45; // radius = 45
+                const strokeDashoffset = circumference - (severity / 100) * circumference;
+                return (
+                  <div style={{ position: 'relative', width: 100, height: 100 }}>
+                    <svg width="100" height="100" style={{ transform: 'rotate(-90deg)' }}>
+                      {/* Background circle */}
+                      <circle
+                        cx="50"
+                        cy="50"
+                        r="45"
+                        stroke="rgba(255,255,255,0.08)"
+                        strokeWidth="6"
+                        fill="transparent"
+                      />
+                      {/* Progress circle */}
+                      <circle
+                        cx="50"
+                        cy="50"
+                        r="45"
+                        stroke={severity < 30 ? '#34d399' : severity < 70 ? '#fbbf24' : '#f87171'}
+                        strokeWidth="6"
+                        fill="transparent"
+                        strokeDasharray={circumference}
+                        strokeDashoffset={strokeDashoffset}
+                        strokeLinecap="round"
+                        style={{ transition: 'stroke-dashoffset 0.5s ease' }}
+                      />
+                    </svg>
+                    <div style={{ 
+                      position: 'absolute', 
+                      top: '50%', 
+                      left: '50%', 
+                      transform: 'translate(-50%, -50%)',
+                      fontWeight: 600,
+                      fontSize: 18,
+                      color: severity < 30 ? '#34d399' : severity < 70 ? '#fbbf24' : '#f87171'
+                    }}>
+                      {severity}%
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
-            <div style={{ marginTop: 6, color: '#9ab', fontSize: 12 }}>
-              {stepIndex === 0 && !running ? 'Start simulation for assessment' : `${Math.round((assessment.severity || 0) * 100)}% overall impact`}
+            <div style={{ textAlign: 'center', color: '#9ab', fontSize: 12 }}>
+              {stepIndex === 0 && !running ? 'Start simulation for assessment' : 'overall impact'}
             </div>
           </div>
-          <div className="card" style={{ padding: 16 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div className="subtitle" style={{ margin: 0 }}>Top risks</div>
-              <div style={{ color: '#9ab', fontSize: 12 }}>auto-derived</div>
+          <div className="card" style={{ padding: 16, display: 'flex', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <div className="subtitle" style={{ margin: 0 }}>Agent Log</div>
+              <div style={{ color: '#9ab', fontSize: 12 }}>{log.length} events</div>
             </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
-              {stepIndex === 0 && !running ? (
-                <span style={{ color: '#9ab' }}>Start simulation to assess risks.</span>
-              ) : (assessment.risks || []).length === 0 ? (
-                <span style={{ color: '#9ab' }}>No critical risks detected.</span>
+            <div style={{ flex: 1, overflow: 'auto', display: 'grid', gap: 4, alignContent: 'start', maxHeight: 180 }}>
+              {log.length === 0 ? (
+                <div style={{ color: '#9ab', fontSize: 12, textAlign: 'center', padding: '10px 0' }}>
+                  No agent activity yet...
+                  <br />
+                  <span style={{ fontSize: 11, opacity: 0.7 }}>Start simulation to see live decisions</span>
+                </div>
               ) : (
-                assessment.risks.map((r, i) => (
-                  <span key={i} style={{ fontSize: 12, padding: '4px 10px', borderRadius: 999, border: '1px solid rgba(255,255,255,0.12)', color: '#d7e6ff' }}>{r}</span>
+                log.slice(0, 12).map((l, i) => (
+                  <div 
+                    key={i} 
+                    style={{ 
+                      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace', 
+                      fontSize: 10, 
+                      color: l.includes('Agent decisions:') ? '#34d399' : 
+                             l.includes('Agent insight:') ? '#60a5fa' : 
+                             l.includes('Agent failed:') ? '#f87171' : 
+                             l.includes('Block:') ? '#fbbf24' : 
+                             l.includes('Assessment:') ? '#a78bfa' : '#d7e6ff',
+                      background: i < 2 ? 'rgba(94,234,212,0.06)' : 'transparent',
+                      padding: '3px 6px',
+                      borderRadius: 4,
+                      borderLeft: l.includes('Agent decisions:') ? '2px solid #34d399' : 
+                                 l.includes('Agent insight:') ? '2px solid #60a5fa' : 
+                                 l.includes('Agent failed:') ? '2px solid #f87171' :
+                                 l.includes('Block:') ? '2px solid #fbbf24' : 
+                                 l.includes('Assessment:') ? '2px solid #a78bfa' : '2px solid transparent',
+                      wordBreak: 'break-word',
+                      lineHeight: 1.3,
+                      transition: 'all 0.2s ease'
+                    }}
+                    title={l}
+                  >
+                    {l.length > 60 ? `${l.substring(0, 57)}...` : l}
+                  </div>
                 ))
               )}
             </div>
@@ -1072,7 +1154,7 @@ export default function SimulationPage() {
 
         {/* Operations Board */}
         <div className="card" style={{ padding: 16, marginBottom: 20, width: '100%', maxWidth: '100%', boxSizing: 'border-box' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, alignItems: 'start' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, alignItems: 'start' }}>
             {[
               { key: 'blocked', label: 'Blocked' },
               { key: 'assess', label: 'Assess' },
@@ -1280,19 +1362,6 @@ export default function SimulationPage() {
                 )}
               </div>
             ))}
-
-            <div className="subtitle" style={{ marginBottom: 0 }}>Agent log</div>
-            <div className="card" style={{ padding: 18, maxHeight: 240, overflow: "auto" }}>
-              {log.length === 0 ? (
-                <div style={{ color: "#9ab" }}>No events yet. Press start or step to run the simulation.</div>
-              ) : (
-                <div style={{ display: "grid", gap: 6 }}>
-                  {log.map((l, i) => (
-                    <div key={i} style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace", fontSize: 12, color: "#d7e6ff" }}>{l}</div>
-                  ))}
-                </div>
-              )}
-            </div>
         </div>
       </div>
     </main>
