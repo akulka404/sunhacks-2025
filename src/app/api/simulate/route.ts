@@ -1,8 +1,6 @@
 import { NextRequest } from "next/server";
-import OpenAI from "openai";
+import { getGemini, callGemini } from "@/lib/gemini";
 import simConfig from "@/config/simulation.json";
-
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 export async function POST(req: NextRequest) {
   try {
@@ -19,45 +17,20 @@ export async function POST(req: NextRequest) {
       );
     }
 
-  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
   const temp = (simConfig as any)?.llm?.temperatureSimulate ?? (simConfig as any)?.llm?.temperature ?? 0.2;
   const top_p = (simConfig as any)?.llm?.top_p ?? 1.0;
 
-    // Ask OpenAI to transform the scenario into structured JSON (no fallback)
-  const completion = await client.chat.completions.create({
-      model,
-  temperature: Number(temp),
-  top_p: Number(top_p),
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content:
-            "You transform crisis scenarios into a structured JSON plan with actors, tasks, constraints, and objectives. Output ONLY valid JSON.",
-        },
-        {
-          role: "user",
-              content: `Scenario: ${text}\n\n${details ? `Additional structured context (optional): ${JSON.stringify(details)}` : ''}\n\nReturn STRICT JSON with this shape (fields may vary by scenario; include only what's relevant):\n{\n  "actors": [{\n    "id": "string",\n    "role": "string (e.g., Mayor, Hospital, Ambulances, Power Utility, Citizens, NGO, Police)",\n    "capabilities": ["string"],\n    "capacity": number,\n    "current_load": number\n  }],\n  "tasks": [{\n    "id": "string",\n    "category": "string (e.g., hospital, shelter, evac_zone, power, comms, logistics, traffic, water, etc.)",
-    "demand": number,
-    "deadline": number, // Unix epoch seconds
+    // Ask Gemini to transform the scenario into structured JSON (no fallback)
+    const systemPrompt = "You transform crisis scenarios into a structured JSON plan with actors, tasks, constraints, and objectives. Output ONLY valid JSON.";
+    
+    const userPrompt = `Scenario: ${text}\n\n${details ? `Additional structured context (optional): ${JSON.stringify(details)}` : ''}\n\nReturn STRICT JSON with this shape (fields may vary by scenario; include only what's relevant):\n{\n  "actors": [{\n    "id": "string",\n    "role": "string (e.g., Mayor, Hospital, Ambulances, Power Utility, Citizens, NGO, Police)",\n    "capabilities": ["string"],\n    "capacity": number,\n    "current_load": number\n  }],\n  "tasks": [{\n    "id": "string",\n    "category": "string (e.g., hospital, shelter, evac_zone, power, comms, logistics, traffic, water, etc.)",\n    "demand": number,\n    "deadline": number, // Unix epoch seconds\n    "location": { "lat": number, "lon": number }\n  }],\n  "constraints": [{\n    "type": "string (e.g., capacity, time, resource, safety, policy)",\n    "actor": "string",\n    "limit": number,\n    "notes": "string optional"\n  }],\n  "objectives": {\n    "<scenario_specific_metric>": number // values in 0..1, e.g., casualties, evac_progress, hospital_power, comms_coverage\n  }\n}\n\nRules:\n- Use the scenario (and additional context if present) to produce realistic, non-placeholder values.\n- For load balancing scenarios, ensure task demands significantly exceed specialist team capacities to demonstrate constraint challenges.\n- Actors should have current_load slightly below capacity (not at full capacity) to allow for some assignment.\n- Deadlines must be Unix epoch seconds (now..+24h typical).\n- Do NOT pre-assign actors to specific tasks - leave tasks unassigned to allow dynamic allocation.\n- If some fields are unknown, estimate conservatively or omit that entry.\n- Objectives should reflect scenario-relevant KPIs and roughly sum to ~1.0 across keys.\n- NO commentary, NO markdown — JSON only.`;
 
-    "location": { "lat": number, "lon": number }
-  }],
-  "constraints": [{
-    "type": "string (e.g., capacity, time, resource, safety, policy)",
-    "actor": "string",
-    "limit": number,
-    "notes": "string optional"
-  }],
-  "objectives": {
-    "<scenario_specific_metric>": number // values in 0..1, e.g., casualties, evac_progress, hospital_power, comms_coverage
-  }
-}\n\nRules:\n- Use the scenario (and additional context if present) to produce realistic, non-placeholder values.\n- For load balancing scenarios, ensure task demands significantly exceed specialist team capacities to demonstrate constraint challenges.\n- Actors should have current_load slightly below capacity (not at full capacity) to allow for some assignment.\n- Deadlines must be Unix epoch seconds (now..+24h typical).\n- Do NOT pre-assign actors to specific tasks - leave tasks unassigned to allow dynamic allocation.\n- If some fields are unknown, estimate conservatively or omit that entry.\n- Objectives should reflect scenario-relevant KPIs and roughly sum to ~1.0 across keys.\n- NO commentary, NO markdown — JSON only.`,
-        },
-      ],
+    const client = getGemini();
+    const content = await callGemini(client, systemPrompt, userPrompt, {
+      temperature: Number(temp),
+      topP: Number(top_p),
+      responseFormat: 'json'
     });
-
-    const content = completion.choices?.[0]?.message?.content || "{}";
     let plan = JSON.parse(content);
 
     // Check if this is a load balancing demo scenario

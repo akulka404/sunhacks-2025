@@ -1,4 +1,5 @@
-import type OpenAI from "openai";
+import type { GoogleGenerativeAI } from "@google/generative-ai";
+import { callGemini } from "./gemini";
 
 export function generateAgentPrompt(actor: any, worldState: any) {
   const caps = Array.isArray(actor?.capabilities) ? actor.capabilities.join(", ") : "";
@@ -25,25 +26,19 @@ Respond strictly in JSON with this object shape:
   `;
 }
 
-export async function callAgentLLM(client: OpenAI, actor: any, worldState: any, simConfig?: any) {
-  const prompt = generateAgentPrompt(actor, worldState);
-  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+export async function callAgentLLM(client: GoogleGenerativeAI, actor: any, worldState: any, simConfig?: any) {
+  const systemPrompt = "You are a disaster response agent making task decisions. Output only valid JSON with { decisions: [...] }.";
+  const userPrompt = generateAgentPrompt(actor, worldState);
+  
   const temp = simConfig?.llm?.temperatureAgent ?? simConfig?.llm?.temperature ?? 0.2;
   const top_p = simConfig?.llm?.top_p ?? 1.0;
-  const completion = await client.chat.completions.create({
-    model,
+  
+  const content = await callGemini(client, systemPrompt, userPrompt, {
     temperature: Number(temp),
-    top_p: Number(top_p),
-    response_format: { type: "json_object" },
-    messages: [
-      {
-        role: "system",
-        content: "You are a disaster response agent making task decisions. Output only valid JSON with { decisions: [...] }.",
-      },
-      { role: "user", content: prompt },
-    ],
+    topP: Number(top_p),
+    responseFormat: 'json'
   });
-  const content = completion.choices?.[0]?.message?.content || "{}";
+  
   try {
     const parsed = JSON.parse(content);
     if (Array.isArray(parsed)) {

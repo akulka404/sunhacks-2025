@@ -19,7 +19,7 @@ export async function callGemini(
   } = {}
 ) {
   const model = client.getGenerativeModel({ 
-    model: "gemini-2.0-flash-exp",
+    model: "gemini-2.0-flash-thinking-exp-1219",
     generationConfig: {
       temperature: options.temperature ?? 0.2,
       topP: options.topP ?? 1.0,
