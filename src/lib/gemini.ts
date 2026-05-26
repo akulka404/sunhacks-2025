@@ -1,5 +1,7 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
+const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
+
 export function getGemini() {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -19,7 +21,7 @@ export async function callGemini(
   } = {}
 ) {
   const model = client.getGenerativeModel({ 
-    model: "gemini-2.0-flash-thinking-exp-1219",
+    model: GEMINI_MODEL,
     generationConfig: {
       temperature: options.temperature ?? 0.2,
       topP: options.topP ?? 1.0,
